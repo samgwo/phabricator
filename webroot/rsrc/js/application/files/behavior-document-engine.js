@@ -105,6 +105,29 @@ JX.behavior('document-engine', function(config, statics) {
 
     list.addItem(highlight_item);
 
+    var blame_item;
+    if (data.blame.uri) {
+      blame_item = new JX.PHUIXActionView()
+        .setIcon(data.blame.icon);
+
+      var onblame = JX.bind(null, function(data, e) {
+        e.prevent();
+
+        if (blame_item.getDisabled()) {
+          return;
+        }
+
+        data.blame.enabled = !data.blame.enabled;
+        onview(data);
+
+        menu.close();
+      }, data);
+
+      blame_item.setHandler(onblame);
+
+      list.addItem(blame_item);
+    }
+
     menu.setContent(list.getNode());
 
     menu.listen('open', function() {
@@ -118,7 +141,21 @@ JX.behavior('document-engine', function(config, statics) {
         if (is_selected) {
           encode_item.setDisabled(!engine.spec.canEncode);
           highlight_item.setDisabled(!engine.spec.canHighlight);
+          if (blame_item) {
+            blame_item.setDisabled(!engine.spec.canBlame);
+          }
         }
+      }
+
+      if (blame_item) {
+        var blame_label;
+        if (data.blame.enabled) {
+          blame_label = data.blame.hide;
+        } else {
+          blame_label = data.blame.show;
+        }
+
+        blame_item.setName(blame_label);
       }
     });
 
@@ -135,6 +172,12 @@ JX.behavior('document-engine', function(config, statics) {
 
     if (data.encode.value) {
       uri.setQueryParam('encode', data.encode.value);
+    }
+
+    if (data.blame.enabled) {
+      uri.setQueryParam('blame', null);
+    } else {
+      uri.setQueryParam('blame', 'off');
     }
 
     return uri.toString();
@@ -211,7 +254,7 @@ JX.behavior('document-engine', function(config, statics) {
     JX.DOM.setContent(viewport, JX.$H(r.markup));
 
     // If this engine supports rendering blame, populate or draw it.
-    if (spec.canBlame) {
+    if (spec.canBlame && data.blame.enabled) {
       blame(data);
     }
   }
@@ -322,7 +365,7 @@ JX.behavior('document-engine', function(config, statics) {
     var h_max = 0.44;
     var h = h_min + ((h_max - h_min) * epoch_value);
 
-    var s = 0.44;
+    var s = 0.25;
 
     var v_min = 0.92;
     var v_max = 1.00;
@@ -357,6 +400,57 @@ JX.behavior('document-engine', function(config, statics) {
     return 'rgb(' + r + ', ' + g + ', ' + b + ')';
   }
 
+  function onhovercoverage(data, e) {
+    if (e.getType() === 'mouseout') {
+      redraw_coverage(data, null);
+      return;
+    }
+
+    var target = e.getNode('tag:th');
+    var coverage = target.getAttribute('data-coverage');
+    if (!coverage) {
+      return;
+    }
+
+    redraw_coverage(data, target);
+  }
+
+  var coverage_row = null;
+  function redraw_coverage(data, node) {
+    if (coverage_row) {
+      JX.DOM.alterClass(
+        coverage_row,
+        'phabricator-source-coverage-highlight',
+        false);
+      coverage_row = null;
+    }
+
+    if (!node) {
+      JX.Tooltip.hide();
+      return;
+    }
+
+    var coverage = node.getAttribute('data-coverage');
+    coverage = coverage.split('/');
+
+    var idx = parseInt(coverage[0], 10);
+    var chr = coverage[1];
+
+    var map = data.coverage.labels[idx];
+    if (map) {
+      var label = map[chr];
+      if (label) {
+        JX.Tooltip.show(node, 300, 'W', label);
+
+        coverage_row = JX.DOM.findAbove(node, 'tr');
+        JX.DOM.alterClass(
+          coverage_row,
+          'phabricator-source-coverage-highlight',
+          true);
+      }
+    }
+  }
+
   if (!statics.initialized) {
     JX.Stratcom.listen('click', 'document-engine-view-dropdown', onmenu);
     statics.initialized = true;
@@ -374,6 +468,12 @@ JX.behavior('document-engine', function(config, statics) {
         blame(data);
         break;
     }
+
+    JX.DOM.listen(
+      JX.$(data.viewportID),
+      ['mouseover', 'mouseout'],
+      'tag:th',
+      JX.bind(null, onhovercoverage, data));
   }
 
 });

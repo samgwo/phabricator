@@ -69,7 +69,7 @@ final class DiffusionDocumentRenderingEngine
     return;
   }
 
-  protected function willRenderRef(PhabricatorDocumentRef $ref) {
+  protected function willStageRef(PhabricatorDocumentRef $ref) {
     $drequest = $this->getDiffusionRequest();
 
     $blame_uri = (string)$drequest->generateURI(
@@ -78,9 +78,18 @@ final class DiffusionDocumentRenderingEngine
         'stable' => true,
       ));
 
-    $ref
-      ->setSymbolMetadata($this->getSymbolMetadata())
-      ->setBlameURI($blame_uri);
+    $ref->setBlameURI($blame_uri);
+  }
+
+  protected function willRenderRef(PhabricatorDocumentRef $ref) {
+    $drequest = $this->getDiffusionRequest();
+
+    $ref->setSymbolMetadata($this->getSymbolMetadata());
+
+    $coverage = $drequest->loadCoverage();
+    if (strlen($coverage)) {
+      $ref->addCoverage($coverage);
+    }
   }
 
   private function getSymbolMetadata() {

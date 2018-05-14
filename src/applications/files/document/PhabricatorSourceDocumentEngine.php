@@ -50,11 +50,15 @@ final class PhabricatorSourceDocumentEngine
     }
 
     $options = array();
-    if ($ref->getBlameURI()) {
+    if ($ref->getBlameURI() && $this->getBlameEnabled()) {
       $content = phutil_split_lines($content);
       $blame = range(1, count($content));
       $blame = array_fuse($blame);
       $options['blame'] = $blame;
+    }
+
+    if ($ref->getCoverage()) {
+      $options['coverage'] = $ref->getCoverage();
     }
 
     return array(

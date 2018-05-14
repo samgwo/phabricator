@@ -7,10 +7,12 @@ final class DifferentialTransactionEditor
   private $isCloseByCommit;
   private $repositoryPHIDOverride = false;
   private $didExpandInlineState = false;
-  private $affectedPaths;
   private $firstBroadcast = false;
   private $wasBroadcasting;
   private $isDraftDemotion;
+
+  private $ownersDiff;
+  private $ownersChangesets;
 
   public function getEditorApplicationClass() {
     return 'PhabricatorDifferentialApplication';
@@ -968,13 +970,20 @@ final class DifferentialTransactionEditor
       return array();
     }
 
-    if (!$this->affectedPaths) {
+    $diff = $this->ownersDiff;
+    $changesets = $this->ownersChangesets;
+
+    $this->ownersDiff = null;
+    $this->ownersChangesets = null;
+
+    if (!$changesets) {
       return array();
     }
 
-    $packages = PhabricatorOwnersPackage::loadAffectedPackages(
+    $packages = PhabricatorOwnersPackage::loadAffectedPackagesForChangesets(
       $repository,
-      $this->affectedPaths);
+      $diff,
+      $changesets);
     if (!$packages) {
       return array();
     }
@@ -1255,9 +1264,12 @@ final class DifferentialTransactionEditor
       $paths[] = $path_prefix.'/'.$changeset->getFilename();
     }
 
-    // Save the affected paths; we'll use them later to query Owners. This
-    // uses the un-expanded paths.
-    $this->affectedPaths = $paths;
+    // If this change affected paths, save the changesets so we can apply
+    // Owners rules to them later.
+    if ($paths) {
+      $this->ownersDiff = $diff;
+      $this->ownersChangesets = $changesets;
+    }
 
     // Mark this as also touching all parent paths, so you can see all pending
     // changes to any file within a directory.
@@ -1555,13 +1567,41 @@ final class DifferentialTransactionEditor
       $auto_undraft = false;
     }
 
-    if ($object->isDraft() && $auto_undraft) {
+    $can_promote = false;
+    $can_demote = false;
+
+    // "Draft" revisions can promote to "Review Requested" after builds pass,
+    // or demote to "Changes Planned" after builds fail.
+    if ($object->isDraft()) {
+      $can_promote = true;
+      $can_demote = true;
+    }
+
+    // See PHI584. "Changes Planned" revisions which are not yet broadcasting
+    // can promote to "Review Requested" if builds pass.
+
+    // This pass is presumably the result of someone restarting the builds and
+    // having them work this time, perhaps because the builds are not perfectly
+    // reliable or perhaps because someone fixed some issue with build hardware
+    // or some other dependency.
+
+    // Currently, there's no legitimate way to end up in this state except
+    // through automatic demotion, so this behavior should not generate an
+    // undue level of confusion or ambiguity. Also note that these changes can
+    // not demote again since they've already been demoted once.
+    if ($object->isChangePlanned()) {
+      if (!$object->getShouldBroadcast()) {
+        $can_promote = true;
+      }
+    }
+
+    if (($can_promote || $can_demote) && $auto_undraft) {
       $status = $this->loadCompletedBuildableStatus($object);
 
       $is_passed = ($status === HarbormasterBuildableStatus::STATUS_PASSED);
       $is_failed = ($status === HarbormasterBuildableStatus::STATUS_FAILED);
 
-      if ($is_passed) {
+      if ($is_passed && $can_promote) {
         // When Harbormaster moves a revision out of the draft state, we
         // attribute the action to the revision author since this is more
         // natural and more useful.
@@ -1593,7 +1633,7 @@ final class DifferentialTransactionEditor
         // batch of transactions finishes so that Herald can fire on the new
         // revision state. See T13027 for discussion.
         $this->queueTransaction($xaction);
-      } else if ($is_failed) {
+      } else if ($is_failed && $can_demote) {
         // When demoting a revision, we act as "Harbormaster" instead of
         // the author since this feels a little more natural.
         $harbormaster_phid = id(new PhabricatorHarbormasterApplication())
@@ -1607,8 +1647,6 @@ final class DifferentialTransactionEditor
           ->setNewValue(true);
 
         $this->queueTransaction($xaction);
-
-        // TODO: Notify the author (only) that we did this.
       }
     }
 
